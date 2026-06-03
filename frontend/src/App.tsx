@@ -10,6 +10,8 @@ import { ChatPage } from '@/pages/ChatPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { ProfilesPage } from '@/pages/ProfilesPage'
 import { AdminPilotPage } from '@/pages/AdminPilotPage'
+import { CitationChipDemoPage } from '@/pages/CitationChipDemoPage'
+import { ChatTooltipProvider } from '@/components/chat/ChatTooltipProvider'
 import { Toaster } from 'react-hot-toast'
 import { api, type MeResponse } from '@/lib/api'
 import { Loader2 } from 'lucide-react'
@@ -64,19 +66,22 @@ export default function App() {
       ) : me && !me.pilot_member && !me.is_admin ? (
         <InviteGatePage />
       ) : (
-        <BrowserRouter>
-          <Routes>
-            <Route element={<DashboardLayout me={me} />}>
-              <Route index element={<Navigate to="/documents" replace />} />
-              <Route path="documents" element={<DocumentsPage />} />
-              <Route path="chat" element={<ChatPage />} />
-              <Route path="knowledge" element={<KnowledgePage />} />
-              <Route path="settings" element={<SettingsPage />} />
-              <Route path="profiles" element={<ProfilesPage />} />
-              {me?.is_admin && <Route path="admin" element={<AdminPilotPage />} />}
-            </Route>
-          </Routes>
-        </BrowserRouter>
+        <ChatTooltipProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route element={<DashboardLayout me={me} />}>
+                <Route index element={<Navigate to="/documents" replace />} />
+                <Route path="documents" element={<DocumentsPage />} />
+                <Route path="chat" element={<ChatPage />} />
+                <Route path="dev/citation-chip" element={<CitationChipDemoPage />} />
+                <Route path="knowledge" element={<KnowledgePage />} />
+                <Route path="settings" element={<SettingsPage />} />
+                <Route path="profiles" element={<ProfilesPage />} />
+                {me?.is_admin && <Route path="admin" element={<AdminPilotPage />} />}
+              </Route>
+            </Routes>
+          </BrowserRouter>
+        </ChatTooltipProvider>
       )}
     </>
   )
