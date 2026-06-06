@@ -6,7 +6,9 @@ import { DashboardLayout } from '@/layouts/DashboardLayout'
 import { InviteGatePage } from '@/pages/InviteGatePage'
 import { KnowledgePage } from '@/pages/KnowledgePage'
 import { DocumentsPage } from '@/pages/DocumentsPage'
+import { DocumentLibraryPage } from '@/pages/DocumentLibraryPage'
 import { ChatPage } from '@/pages/ChatPage'
+import { TimeMachinePage } from '@/pages/TimeMachinePage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { ProfilesPage } from '@/pages/ProfilesPage'
 import { AdminPilotPage } from '@/pages/AdminPilotPage'
@@ -72,7 +74,9 @@ export default function App() {
               <Route element={<DashboardLayout me={me} />}>
                 <Route index element={<Navigate to="/documents" replace />} />
                 <Route path="documents" element={<DocumentsPage />} />
+                <Route path="library" element={<DocumentLibraryPage />} />
                 <Route path="chat" element={<ChatPage />} />
+                <Route path="time-machine" element={<TimeMachinePage />} />
                 <Route path="dev/citation-chip" element={<CitationChipDemoPage />} />
                 <Route path="knowledge" element={<KnowledgePage />} />
                 <Route path="settings" element={<SettingsPage />} />

@@ -10,6 +10,7 @@ import numpy as np
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.telemetry import traced_span
 from app.db.postgres import get_pool
 from app.db.supabase import get_supabase, run_supabase
 from app.utils.embeddings import embed_texts
@@ -246,18 +247,28 @@ async def get_relevant_chunks(
     top_k: int | None = None,
 ) -> list[RetrievedChunk]:
     """Embed query and run hybrid search."""
-    embeddings = await embed_texts([query])
-    query_embedding = embeddings[0] if embeddings and embeddings[0] else []
-    chunks = await hybrid_search(
-        query,
-        user_id,
-        query_embedding,
-        document_ids=document_ids,
-        top_k=top_k,
-    )
-    if query_embedding and len(chunks) > 1:
-        chunks = _rerank_cosine(chunks, query_embedding)
-    return chunks[: top_k or settings.RAG_TOP_K]
+    span_attrs: dict[str, int] = {}
+    if document_ids:
+        span_attrs["rag.scope.doc_count"] = len(document_ids)
+        logger.info(
+            "Scoped retrieval for user %s: %d document(s)",
+            user_id,
+            len(document_ids),
+        )
+
+    with traced_span("rag.retrieval", span_attrs or None):
+        embeddings = await embed_texts([query])
+        query_embedding = embeddings[0] if embeddings and embeddings[0] else []
+        chunks = await hybrid_search(
+            query,
+            user_id,
+            query_embedding,
+            document_ids=document_ids,
+            top_k=top_k,
+        )
+        if query_embedding and len(chunks) > 1:
+            chunks = _rerank_cosine(chunks, query_embedding)
+        return chunks[: top_k or settings.RAG_TOP_K]
 
 
 def _rerank_cosine(chunks: list[RetrievedChunk], query_embedding: list[float]) -> list[RetrievedChunk]:

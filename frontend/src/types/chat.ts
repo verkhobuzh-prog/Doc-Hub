@@ -98,13 +98,102 @@ export interface ChatResponse {
   conversation_id: UUID
 }
 
+/** Retrieved chunk emitted at stream start (`rag_service.query_stream` `sources` event). */
+export interface StreamSource {
+  document_id: UUID
+  chunk_index: number
+  chunk_id?: UUID | null
+  snippet: string
+  score: number
+  filename?: string | null
+  vector_score?: number | null
+  fts_score?: number | null
+}
+
+/** Citation payload inside backend `done` event (chunk-level, not full UI `Citation`). */
+export interface StreamCitationPayload {
+  document_id: UUID
+  chunk_index: number
+  snippet: string
+  label?: string | null
+}
+
 /**
- * Server-sent events emitted while streaming a chat completion.
- * Tokens arrive incrementally; citations and confidence may follow before `done`.
+ * Server-sent events from `POST /api/v1/chat` with `stream: true`.
+ * Matches `backend/app/services/rag_service.py` `query_stream` yields.
  */
 export type ChatStreamEvent =
+  | { type: 'sources'; sources: StreamSource[] }
   | { type: 'token'; content: string }
   | { type: 'citation'; citation: Citation }
   | { type: 'confidence'; score: number }
-  | { type: 'done'; message_id: UUID }
+  | {
+      type: 'done'
+      answer: string
+      citations: StreamCitationPayload[]
+      model: string
+      risk_score?: number
+      risk_level?: string
+      risk_warning?: string | null
+      low_confidence_facts?: number
+      disputed_facts?: number
+      total_facts_analyzed?: number
+    }
   | { type: 'error'; error: string }
+
+/** Document row in Time Machine snapshot/diff responses. */
+export interface TimeMachineDocument {
+  id: UUID
+  filename: string
+  title: string
+  status: string
+  document_type?: string | null
+  subject?: string | null
+  size_bytes: number
+  valid_from?: ISODateTime | null
+  valid_to?: ISODateTime | null
+  supersedes_doc_id?: UUID | null
+  created_at: ISODateTime
+  metadata?: Record<string, unknown>
+}
+
+/** `GET /api/v1/time-machine/snapshot` */
+export interface TimeMachineSnapshotResponse {
+  as_of: ISODateTime
+  documents: TimeMachineDocument[]
+  total: number
+  earliest_document_at?: ISODateTime | null
+}
+
+/** Old → new version pair when a document was superseded. */
+export interface SupersededPair {
+  old: TimeMachineDocument
+  new: TimeMachineDocument
+}
+
+/** `GET /api/v1/time-machine/diff` */
+export interface TimeMachineDiff {
+  t1: ISODateTime
+  t2: ISODateTime
+  added: TimeMachineDocument[]
+  removed: TimeMachineDocument[]
+  /** Documents that became invalid during the window. */
+  superseded: TimeMachineDocument[]
+  /** Paired old → new replacements (derived from superseded + added). */
+  superseded_pairs: SupersededPair[]
+}
+
+/** Timeline marker for uploads / version events. */
+export interface TimelineEvent {
+  document_id: UUID
+  filename: string
+  event_type: string
+  occurred_at: ISODateTime
+  label?: string | null
+}
+
+/** `GET /api/v1/time-machine/timeline` */
+export interface TimeMachineTimelineResponse {
+  events: TimelineEvent[]
+  earliest_at?: ISODateTime | null
+}

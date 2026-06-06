@@ -1,4 +1,13 @@
 import { useAuthStore } from '@/stores/authStore'
+import { chatSend, type ChatSendOptions, type ChatStreamHandler, ChatStreamError } from '@/lib/chatStream'
+import type {
+  TimeMachineDiff,
+  TimeMachineSnapshotResponse,
+  TimeMachineTimelineResponse,
+} from '@/types/chat'
+
+export { ChatStreamError, chatSend }
+export type { ChatSendOptions, ChatStreamHandler }
 
 const BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -137,6 +146,15 @@ export interface CompareDocumentsResponse {
   summary: string
 }
 
+export type {
+  TimeMachineDiff,
+  TimeMachineDocument,
+  TimeMachineSnapshotResponse,
+  TimeMachineTimelineResponse,
+  TimelineEvent,
+  SupersededPair,
+} from '@/types/chat'
+
 export interface KnowledgeGraphNode {
   id: string
   name: string
@@ -223,12 +241,17 @@ export const api = {
   },
 
   chat: {
+    /** @deprecated Use `chatSend()` / `api.chat.send()` for typed SSE streaming. */
     query: (query: string, topK = 8, documentIds?: string[]) =>
       request<ChatResponse>('/api/v1/chat', {
         method: 'POST',
         body: JSON.stringify({ query, top_k: topK, document_ids: documentIds }),
       }),
 
+    /** Typed SSE chat stream (`POST /api/v1/chat`, `stream: true`). */
+    send: (options: ChatSendOptions) => chatSend(options),
+
+    /** @deprecated Use `api.chat.send()` — yields untyped raw SSE chunks. */
     stream: async function* (query: string, topK = 8) {
       const token = useAuthStore.getState().token
       const res = await fetch(`${BASE}/api/v1/chat`, {
@@ -320,6 +343,18 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ doc_ids: docIds }),
       }),
+  },
+
+  timeMachine: {
+    snapshot: (asOf: Date) =>
+      request<TimeMachineSnapshotResponse>(
+        `/api/v1/time-machine/snapshot?as_of=${encodeURIComponent(asOf.toISOString())}`,
+      ),
+    diff: (from: Date, to: Date) =>
+      request<TimeMachineDiff>(
+        `/api/v1/time-machine/diff?t1=${encodeURIComponent(from.toISOString())}&t2=${encodeURIComponent(to.toISOString())}`,
+      ),
+    timeline: () => request<TimeMachineTimelineResponse>('/api/v1/time-machine/timeline'),
   },
 
   profiles: {

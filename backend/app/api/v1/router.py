@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     invites,
     knowledge,
     reasoning,
+    time_machine,
 )
 from app.api.v1.endpoints.profiles import profiles_router
 
@@ -40,5 +41,10 @@ api_router.include_router(
 api_router.include_router(profiles_router)
 api_router.include_router(knowledge.router, prefix="/knowledge", tags=["knowledge"])
 api_router.include_router(reasoning.router, prefix="/reasoning", tags=["reasoning"])
+api_router.include_router(
+    time_machine.time_machine_router,
+    prefix="/time-machine",
+    tags=["time-machine"],
+)
 api_router.include_router(invites.invites_router)
 api_router.include_router(admin.admin_router)

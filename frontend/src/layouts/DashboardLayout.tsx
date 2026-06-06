@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import {
   FileText,
+  Library,
   MessageSquare,
+  History,
   LogOut,
   Menu,
   Shield,
@@ -36,8 +38,10 @@ export function DashboardLayout({ me }: { me: MeResponse | null }) {
 
   const nav = [
     { path: '/documents', label: 'Документи', icon: FileText },
+    { path: '/library', label: 'Library', icon: Library },
     { path: '/chat', label: 'Chat AI', icon: MessageSquare },
     { path: '/knowledge', label: 'Knowledge Graph', icon: Network },
+    { path: '/time-machine', label: 'Time Machine', icon: History },
     { path: '/settings', label: 'Безпека', icon: Shield },
     { path: '/profiles', label: 'Профілі AI', icon: User },
   ]
