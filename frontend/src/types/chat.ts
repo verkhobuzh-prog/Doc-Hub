@@ -98,13 +98,45 @@ export interface ChatResponse {
   conversation_id: UUID
 }
 
+/** Retrieved chunk emitted at stream start (`rag_service.query_stream` `sources` event). */
+export interface StreamSource {
+  document_id: UUID
+  chunk_index: number
+  chunk_id?: UUID | null
+  snippet: string
+  score: number
+  filename?: string | null
+  vector_score?: number | null
+  fts_score?: number | null
+}
+
+/** Citation payload inside backend `done` event (chunk-level, not full UI `Citation`). */
+export interface StreamCitationPayload {
+  document_id: UUID
+  chunk_index: number
+  snippet: string
+  label?: string | null
+}
+
 /**
- * Server-sent events emitted while streaming a chat completion.
- * Tokens arrive incrementally; citations and confidence may follow before `done`.
+ * Server-sent events from `POST /api/v1/chat` with `stream: true`.
+ * Matches `backend/app/services/rag_service.py` `query_stream` yields.
  */
 export type ChatStreamEvent =
+  | { type: 'sources'; sources: StreamSource[] }
   | { type: 'token'; content: string }
   | { type: 'citation'; citation: Citation }
   | { type: 'confidence'; score: number }
-  | { type: 'done'; message_id: UUID }
+  | {
+      type: 'done'
+      answer: string
+      citations: StreamCitationPayload[]
+      model: string
+      risk_score?: number
+      risk_level?: string
+      risk_warning?: string | null
+      low_confidence_facts?: number
+      disputed_facts?: number
+      total_facts_analyzed?: number
+    }
   | { type: 'error'; error: string }

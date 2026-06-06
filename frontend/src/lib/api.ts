@@ -1,4 +1,8 @@
 import { useAuthStore } from '@/stores/authStore'
+import { chatSend, type ChatSendOptions, type ChatStreamHandler, ChatStreamError } from '@/lib/chatStream'
+
+export { ChatStreamError, chatSend }
+export type { ChatSendOptions, ChatStreamHandler }
 
 const BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -223,12 +227,17 @@ export const api = {
   },
 
   chat: {
+    /** @deprecated Use `chatSend()` / `api.chat.send()` for typed SSE streaming. */
     query: (query: string, topK = 8, documentIds?: string[]) =>
       request<ChatResponse>('/api/v1/chat', {
         method: 'POST',
         body: JSON.stringify({ query, top_k: topK, document_ids: documentIds }),
       }),
 
+    /** Typed SSE chat stream (`POST /api/v1/chat`, `stream: true`). */
+    send: (options: ChatSendOptions) => chatSend(options),
+
+    /** @deprecated Use `api.chat.send()` — yields untyped raw SSE chunks. */
     stream: async function* (query: string, topK = 8) {
       const token = useAuthStore.getState().token
       const res = await fetch(`${BASE}/api/v1/chat`, {
