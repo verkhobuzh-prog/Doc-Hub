@@ -3,12 +3,20 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, status
 
+from app.core.config import settings
 from app.core.security import get_admin_user, get_current_user
 from app.schemas.ingestion import IngestionResponse, IngestionStatus
 from app.services.ingestion_service import IngestionService, get_ingestion_service
 from app.services.job_queue import get_job_queue
 
 ingestion_router = APIRouter()
+
+
+async def _save_celery_task_id(document_id: UUID, task_id: str, user_id: str) -> None:
+    """Merge celery_task_id into document metadata for status polling."""
+    from app.tasks.ingest_task import save_celery_task_id
+
+    await save_celery_task_id(document_id, task_id, user_id)
 
 
 @ingestion_router.get(
@@ -50,11 +58,31 @@ async def ingest_document(
     """
     Trigger ingestion pipeline.
 
-    - `sync=false` (default): runs in background, returns 202 immediately.
     - `sync=true`: blocks until ingestion completes (useful for dev/tests).
+    - Celery when INGESTION_USE_CELERY=true, else Redis job queue, else BackgroundTasks.
     """
     if sync:
         return await service.start_ingestion(document_id, current_user)
+
+    if settings.ingestion_use_celery:
+        from app.tasks.ingest_task import dispatch_ingestion
+
+        task_id = dispatch_ingestion(
+            document_id=document_id,
+            user=current_user,
+            use_celery=True,
+        )
+        if task_id:
+            await _save_celery_task_id(
+                document_id,
+                task_id,
+                str(current_user["id"]),
+            )
+            return IngestionResponse(
+                document_id=document_id,
+                status=IngestionStatus.PARSING,
+                message=f"queued celery:{task_id}",
+            )
 
     queue = get_job_queue()
     enqueued = await queue.enqueue(

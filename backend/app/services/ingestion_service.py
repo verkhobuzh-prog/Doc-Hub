@@ -8,7 +8,7 @@ from fastapi import HTTPException, status
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.telemetry import traced_span
+from app.core.telemetry import async_ingestion_span, trace_ingest, traced_span
 from app.core.state_machine import DocumentEvent, DocumentState
 from app.db.supabase import download_file, get_supabase, run_supabase
 from app.schemas.ingestion import ChunkMetadata, IngestionResponse, IngestionStatus
@@ -51,6 +51,7 @@ async def _lifecycle_step(
 
 
 class IngestionService:
+    @trace_ingest
     async def start_ingestion(
         self,
         document_id: UUID,
@@ -85,153 +86,144 @@ class IngestionService:
 
         failure_event = DocumentEvent.FAIL_PARSE
 
-        with traced_span(
-            "ingestion.run",
-            {
-                "document.id": doc_id,
-                "user.id": user_id,
-            },
-        ) as root_span:
+        try:
+            await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.VALIDATE)
+            await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.QUEUE)
+            await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.START_PARSE)
+
+            async with async_ingestion_span(
+                "parse_document",
+                filename=doc.get("filename") or "",
+            ):
+                raw = await download_file(doc["storage_path"])
+                parsed = await asyncio.to_thread(
+                    parse_document,
+                    raw,
+                    doc.get("mime_type") or "application/octet-stream",
+                    doc.get("filename") or "",
+                )
+
+            if not parsed.text.strip():
+                raise ValueError("No extractable text in document")
+
+            await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.FINISH_PARSE)
+
+            with traced_span("ingestion.chunk"):
+                chunks = chunk_text(parsed.text)
+            if not chunks:
+                raise ValueError("Chunking produced no content")
+
+            failure_event = DocumentEvent.FAIL_EMBED
+            await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.START_EMBED)
+
+            async with async_ingestion_span("embed_chunks", chunk_count=len(chunks)):
+                embeddings = await embed_texts(chunks, user_id=user_id)
+            embeddings_count = sum(1 for e in embeddings if e is not None)
+
+            await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.FINISH_EMBED)
+
+            chunk_rows = self._build_chunk_rows(
+                document_id=document_id,
+                chunks=chunks,
+                parser=parsed.parser,
+                doc_metadata=parsed.metadata,
+            )
+
+            await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.START_GRAPH)
             try:
-                await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.VALIDATE)
-                await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.QUEUE)
-                await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.START_PARSE)
+                if settings.TRIPLE_EXTRACTION_ENABLED:
+                    from app.services.graph_service import GraphService
+                    from app.utils.triple_extractor import TripleExtractor
 
-                with traced_span("ingestion.parse", {"document.id": doc_id}):
-                    raw = await download_file(doc["storage_path"])
-                    parsed = await asyncio.to_thread(
-                        parse_document,
-                        raw,
-                        doc.get("mime_type") or "application/octet-stream",
-                        doc.get("filename") or "",
-                    )
+                    extractor = TripleExtractor()
+                    graph_svc = GraphService()
 
-                if not parsed.text.strip():
-                    raise ValueError("No extractable text in document")
-
-                root_span.set_attribute("parser", parsed.parser)
-                root_span.set_attribute("text.length", len(parsed.text))
-
-                await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.FINISH_PARSE)
-
-                with traced_span("ingestion.chunk"):
-                    chunks = chunk_text(parsed.text)
-                if not chunks:
-                    raise ValueError("Chunking produced no content")
-
-                root_span.set_attribute("chunks.count", len(chunks))
-
-                failure_event = DocumentEvent.FAIL_EMBED
-                await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.START_EMBED)
-
-                with traced_span("ingestion.embed", {"chunks.count": len(chunks)}):
-                    embeddings = await embed_texts(chunks)
-                embeddings_count = sum(1 for e in embeddings if e is not None)
-
-                await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.FINISH_EMBED)
-
-                chunk_rows = self._build_chunk_rows(
-                    document_id=document_id,
-                    chunks=chunks,
-                    parser=parsed.parser,
-                    doc_metadata=parsed.metadata,
-                )
-
-                await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.START_GRAPH)
-                try:
-                    if settings.TRIPLE_EXTRACTION_ENABLED:
-                        from app.services.graph_service import GraphService
-                        from app.utils.triple_extractor import TripleExtractor
-
-                        extractor = TripleExtractor()
-                        graph_svc = GraphService()
-
-                        for chunk in chunk_rows:
-                            triples = await extractor.extract(
-                                chunk_text=chunk["content"],
-                                doc_id=doc_id,
-                                chunk_id=str(chunk["id"]),
-                                page_num=chunk.get("metadata", {}).get("page_num"),
+                    for chunk in chunk_rows:
+                        triples = await extractor.extract(
+                            chunk_text=chunk["content"],
+                            doc_id=doc_id,
+                            chunk_id=str(chunk["id"]),
+                            page_num=chunk.get("metadata", {}).get("page_num"),
+                        )
+                        if triples:
+                            await graph_svc.upsert_triples(triples, doc_id=doc_id)
+                            logger.info(
+                                "Extracted %d triples from chunk %s",
+                                len(triples),
+                                chunk["id"],
                             )
-                            if triples:
-                                await graph_svc.upsert_triples(triples, doc_id=doc_id)
-                                logger.info(
-                                    "Extracted %d triples from chunk %s",
-                                    len(triples),
-                                    chunk["id"],
-                                )
-                    await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.FINISH_GRAPH)
-                except Exception as exc:
-                    logger.warning(
-                        "Triple extraction / graph upsert failed for document %s: %s",
-                        document_id,
-                        exc,
-                    )
-                    await _lifecycle_step(
-                        lifecycle,
-                        doc_id,
-                        user_id,
-                        DocumentEvent.FAIL_GRAPH,
-                        error_message=str(exc),
-                    )
-
-                with traced_span("ingestion.upsert"):
-                    await self._delete_existing_chunks(document_id)
-                    await self._insert_chunk_rows(chunk_rows, embeddings=embeddings)
-
-                await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.COMPLETE)
-
-                await self._patch_metadata(
-                    document_id,
-                    {
-                        "ingestion": {
-                            "parser": parsed.parser,
-                            "chunks": len(chunks),
-                            "embeddings": embeddings_count,
-                            "completed_at": datetime.now(timezone.utc).isoformat(),
-                        }
-                    },
-                )
-
-                return IngestionResponse(
-                    document_id=document_id,
-                    status=IngestionStatus.INDEXED,
-                    chunks_created=len(chunks),
-                    embeddings_created=embeddings_count,
-                    message="Document ingested successfully",
-                    started_at=started_at,
-                    completed_at=datetime.now(timezone.utc),
-                )
-
-            except HTTPException:
-                raise
+                await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.FINISH_GRAPH)
             except Exception as exc:
-                logger.exception("Ingestion failed for document %s", document_id)
-                error_code = (
-                    "EMBED_ERROR"
-                    if failure_event == DocumentEvent.FAIL_EMBED
-                    else "PARSE_ERROR"
+                logger.warning(
+                    "Triple extraction / graph upsert failed for document %s: %s",
+                    document_id,
+                    exc,
                 )
                 await _lifecycle_step(
                     lifecycle,
                     doc_id,
                     user_id,
-                    failure_event,
-                    error_code=error_code,
+                    DocumentEvent.FAIL_GRAPH,
                     error_message=str(exc),
                 )
-                await self._patch_metadata(
-                    document_id,
-                    {"ingestion_error": str(exc)},
-                )
-                return IngestionResponse(
-                    document_id=document_id,
-                    status=IngestionStatus.FAILED,
-                    message="Ingestion failed",
-                    error=str(exc),
-                    started_at=started_at,
-                    completed_at=datetime.now(timezone.utc),
-                )
+
+            with traced_span("ingestion.upsert"):
+                await self._delete_existing_chunks(document_id)
+                await self._insert_chunk_rows(chunk_rows, embeddings=embeddings)
+
+            await _lifecycle_step(lifecycle, doc_id, user_id, DocumentEvent.COMPLETE)
+
+            await self._patch_metadata(
+                document_id,
+                {
+                    "ingestion": {
+                        "parser": parsed.parser,
+                        "chunks": len(chunks),
+                        "embeddings": embeddings_count,
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
+            )
+
+            return IngestionResponse(
+                document_id=document_id,
+                status=IngestionStatus.INDEXED,
+                chunks_created=len(chunks),
+                embeddings_created=embeddings_count,
+                message="Document ingested successfully",
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("Ingestion failed for document %s", document_id)
+            error_code = (
+                "EMBED_ERROR"
+                if failure_event == DocumentEvent.FAIL_EMBED
+                else "PARSE_ERROR"
+            )
+            await _lifecycle_step(
+                lifecycle,
+                doc_id,
+                user_id,
+                failure_event,
+                error_code=error_code,
+                error_message=str(exc),
+            )
+            await self._patch_metadata(
+                document_id,
+                {"ingestion_error": str(exc)},
+            )
+            return IngestionResponse(
+                document_id=document_id,
+                status=IngestionStatus.FAILED,
+                message="Ingestion failed",
+                error=str(exc),
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
 
     async def _get_document(self, document_id: UUID, user_id: str) -> dict | None:
         client = get_supabase()

@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     config_public,
     documents,
     ingestion,
+    ingestion_status,
     ingestion_ws,
     invites,
     knowledge,
@@ -24,6 +25,11 @@ api_router.include_router(
 )
 api_router.include_router(
     ingestion.ingestion_router,
+    prefix="/documents",
+    tags=["ingestion"],
+)
+api_router.include_router(
+    ingestion_status.router,
     prefix="/documents",
     tags=["ingestion"],
 )

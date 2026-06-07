@@ -15,6 +15,33 @@ from app.services.document_upload_policy import MAX_AUDIO_SIZE, MAX_DOCUMENT_SIZ
 documents_router = APIRouter()
 
 
+async def _queue_ingestion(
+    *,
+    document_id: UUID,
+    current_user: dict,
+    background_tasks: BackgroundTasks,
+) -> None:
+    """Celery queue when enabled, otherwise BackgroundTasks (unchanged fallback)."""
+    if settings.INGESTION_USE_CELERY:
+        from app.tasks.ingest_task import ingest_document_task, save_celery_task_id
+
+        task = ingest_document_task.apply_async(
+            kwargs={
+                "document_id": str(document_id),
+                "user_id": str(current_user["id"]),
+            },
+            queue="ingestion",
+        )
+        await save_celery_task_id(document_id, task.id, str(current_user["id"]))
+    else:
+        ingestion = get_ingestion_service()
+        background_tasks.add_task(
+            ingestion.start_ingestion,
+            document_id,
+            current_user,
+        )
+
+
 def get_document_service() -> DocumentService:
     return DocumentService()
 
@@ -53,11 +80,10 @@ async def upload_document(
     if settings.INGESTION_AUTO_START and await service.should_auto_ingest(
         result.document.mime_type or ""
     ):
-        ingestion = get_ingestion_service()
-        background_tasks.add_task(
-            ingestion.start_ingestion,
-            result.document.id,
-            current_user,
+        await _queue_ingestion(
+            document_id=result.document.id,
+            current_user=current_user,
+            background_tasks=background_tasks,
         )
     return result
 
@@ -154,8 +180,11 @@ async def retry_document_ingestion(
     await lifecycle.transition(doc_id, user_id, DocumentEvent.RETRY)
     await lifecycle.transition(doc_id, user_id, DocumentEvent.QUEUE)
 
-    ingestion = get_ingestion_service()
-    background_tasks.add_task(ingestion.start_ingestion, document_id, current_user)
+    await _queue_ingestion(
+        document_id=document_id,
+        current_user=current_user,
+        background_tasks=background_tasks,
+    )
 
     return {
         "doc_id": doc_id,
