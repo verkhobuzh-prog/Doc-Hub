@@ -16,10 +16,10 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import get_logger, setup_logging
-from app.core.telemetry import init_telemetry
+from app.core.telemetry import setup_telemetry
 from app.core.startup_validation import (
     StartupSecurityError,
-    run_startup_security_checks,
+    run_startup_validation,
 )
 from app.db import close_redis, close_supabase, init_redis, init_supabase, ping_redis, ping_supabase
 from app.db.postgres import close_postgres, init_postgres
@@ -31,16 +31,17 @@ logger = get_logger("dochub.main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    setup_logging()
-
     # ════════════════════════════════════════════════════
-    # КРОК 1: Security validation — ПЕРШ НІЖ що-небудь інше
+    # КРОК 1: Security validation — ПЕРШИЙ виклик у lifespan
     # ════════════════════════════════════════════════════
     try:
-        run_startup_security_checks(settings)
-    except StartupSecurityError as exc:
-        logger.critical("Startup aborted due to security violation: %s", exc)
+        run_startup_validation(settings)
+    except StartupSecurityError:
         raise
+
+    setup_telemetry(app)
+
+    setup_logging()
 
     # ════════════════════════════════════════════════════
     # КРОК 2: Звичайна ініціалізація
@@ -77,8 +78,6 @@ def create_app() -> FastAPI:
         redoc_url="/redoc" if not settings.is_production else None,
     )
 
-    init_telemetry(app)
-
     register_exception_handlers(app)
 
     # ════════════════════════════════════════════════════
@@ -86,23 +85,18 @@ def create_app() -> FastAPI:
     #
     #   add_middleware() порядок    →    виконання (request)
     #   ─────────────────────────────────────────────────
-    #   1. RequestContextMiddleware →  3. виконується 3-м  (inner)
-    #   2. RateLimitMiddleware      →  2. виконується 2-м
+    #   1. RateLimitMiddleware      →  3. виконується 3-м  (перед handler)
+    #   2. RequestContextMiddleware →  2. виконується 2-м
     #   3. CORSMiddleware           →  1. виконується 1-м  (outer)
     #
-    # Запит проходить: CORS → RateLimit → RequestContext → handler
-    # Відповідь йде зворотньо: handler → RequestContext → RateLimit → CORS
-    #
-    # Чому саме такий порядок:
-    #   - CORS першим: preflight OPTIONS не витрачає rate limit quota
-    #   - RateLimit другим: блокуємо до бізнес-логіки, X-Request-ID вже є
-    #   - RequestContext: встановлює request_id для логів
+    # Запит: CORS → RequestContext → RateLimit → handler
+    # RateLimit — перший зареєстрований middleware (C7 audit).
+    # /health, /docs, /openapi.json — exempt у RateLimitMiddleware.
     # ════════════════════════════════════════════════════
 
-    app.add_middleware(RequestContextMiddleware)  # ← додається 1-м → виконується внутрішнім
+    app.add_middleware(RateLimitMiddleware)  # ← 1-й у stack (C7)
 
-    # ▼ НОВИЙ (Крок 5) ▼
-    app.add_middleware(RateLimitMiddleware)  # ← додається 2-м → виконується середнім
+    app.add_middleware(RequestContextMiddleware)
 
     origins = list(settings.cors_origins_list)
     if settings.FRONTEND_URL and settings.FRONTEND_URL not in origins:

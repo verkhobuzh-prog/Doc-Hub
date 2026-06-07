@@ -45,7 +45,10 @@ class Settings(BaseSettings):
     GRAPH_DB_ENABLED: bool = False
 
     # Observability (OpenTelemetry → Grafana Cloud Tempo)
+    OTEL_SERVICE_NAME: str = "doc-hub-backend"
     OTEL_EXPORTER_OTLP_ENDPOINT: str = ""
+    OTLP_ENDPOINT: str = ""
+    OTLP_HEADERS: str = ""
     OTEL_GRAFANA_INSTANCE_ID: str = ""
     OTEL_GRAFANA_API_TOKEN: str = ""
 
@@ -62,6 +65,7 @@ class Settings(BaseSettings):
     INGESTION_CHUNK_SIZE: int = Field(default=512, ge=128, le=8192)
     INGESTION_CHUNK_OVERLAP: int = Field(default=64, ge=0, le=512)
     INGESTION_AUTO_START: bool = True
+    INGESTION_USE_CELERY: bool = False
 
     # Ingestion 2.0
     TRIPLE_EXTRACTION_ENABLED: bool = False
@@ -99,6 +103,10 @@ class Settings(BaseSettings):
         return bool(self.SUPABASE_URL and self.SUPABASE_SERVICE_ROLE_KEY)
 
     @property
+    def database_configured(self) -> bool:
+        return bool(str(self.DATABASE_URL).strip())
+
+    @property
     def redis_configured(self) -> bool:
         return bool(self.REDIS_URL)
 
@@ -130,6 +138,14 @@ class Settings(BaseSettings):
     def auth_disabled(self) -> bool:
         """Dev/test only — never enable in production."""
         return self.AUTH_DISABLED and self.ENVIRONMENT == "development"
+
+    @property
+    def ingestion_use_celery(self) -> bool:
+        return self.INGESTION_USE_CELERY
+
+    @property
+    def otlp_endpoint(self) -> str:
+        return (self.OTLP_ENDPOINT or self.OTEL_EXPORTER_OTLP_ENDPOINT).strip()
 
     @property
     def pilot_admin_emails(self) -> set[str]:
