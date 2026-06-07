@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from typing import List
-
 from openai import OpenAI
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.utils.cost_logging import track_openai_call
+from app.middleware.cost_logging import track_openai_call
 
 logger = get_logger("dochub.embeddings")
 
@@ -38,7 +36,7 @@ async def embed_texts(
         ),
         model=settings.EMBEDDING_MODEL,
         user_id=user_id or "system",
-        operation="embed_chunks",
+        request_type="embed_chunks",
         trace_id=request_id,
     )
     return [item.embedding for item in response.data]

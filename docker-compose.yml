@@ -1,13 +1,19 @@
-# Doc-Hub — повна конфігурація з пінованою FalkorDB
-# ADR-001: FalkorDB обрано над Neo4j
-# docs/adr/ADR-001-graph-database-engine.md
-#
-# Примітки адаптації під repo:
-# - migrations: ./infra/supabase/migrations (не ./backend/db/migrations)
-# - FalkorDB v4.18.6 (ADR-001; не v4.0.5 / latest)
-# - Backend читає GRAPH_DB_* (compose будує URL з FALKORDB_PASSWORD)
+# Doc-Hub — Docker Compose (backend + Celery profile)
+# migrations: ./infra/supabase/migrations
 
 version: "3.9"
+
+x-backend-env: &backend-env
+  API_HOST: 0.0.0.0
+  API_PORT: 8000
+  DATABASE_URL: postgresql://${POSTGRES_USER:-dochub}:${POSTGRES_PASSWORD:-dochub}@postgres:5432/${POSTGRES_DB:-dochub}
+  REDIS_URL: redis://:${REDIS_PASSWORD:-dochub_redis_secret}@redis:6379/0
+  GRAPH_DB_ENABLED: ${GRAPH_DB_ENABLED:-true}
+  GRAPH_DB_URL: redis://:${FALKORDB_PASSWORD:-dochub_graph_secret}@falkordb:6379
+  GRAPH_DB_NAME: ${GRAPH_DB_NAME:-dochub_knowledge}
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_JSON: ${LOG_JSON:-false}
 
 networks:
   dochub_net:
@@ -25,7 +31,6 @@ volumes:
     name: dochub_backend_cache
 
 services:
-  # ── POSTGRESQL + pgvector (vector RAG) ───────────────────────────────────
   postgres:
     image: pgvector/pgvector:pg16
     container_name: dochub-postgres
@@ -52,7 +57,6 @@ services:
     networks:
       - dochub_net
 
-  # ── REDIS (cache + rate limiting) ────────────────────────────────────────
   redis:
     image: redis:7.2-alpine
     container_name: dochub-redis
@@ -62,7 +66,7 @@ services:
       --requirepass ${REDIS_PASSWORD:-dochub_redis_secret}
       --appendonly yes
       --appendfilename redis.aof
-      --maxmemory ${REDIS_MAX_MEMORY:-256mb}
+      --maxmemory 256mb
       --maxmemory-policy allkeys-lru
     ports:
       - "${REDIS_PORT:-6379}:6379"
@@ -84,9 +88,8 @@ services:
     networks:
       - dochub_net
 
-  # ── FALKORDB (Knowledge Graph — Legal Domain) ────────────────────────────
   falkordb:
-    image: falkordb/falkordb:v4.18.6
+    image: falkordb/falkordb:v4.0.5
     container_name: dochub-falkordb
     restart: unless-stopped
     environment:
@@ -119,7 +122,6 @@ services:
     networks:
       - dochub_net
 
-  # ── BACKEND (FastAPI) ────────────────────────────────────────────────────
   backend:
     build:
       context: ./backend
@@ -130,16 +132,7 @@ services:
     env_file:
       - .env
     environment:
-      API_HOST: 0.0.0.0
-      API_PORT: 8000
-      DATABASE_URL: postgresql://${POSTGRES_USER:-dochub}:${POSTGRES_PASSWORD:-dochub}@postgres:5432/${POSTGRES_DB:-dochub}
-      REDIS_URL: redis://:${REDIS_PASSWORD:-dochub_redis_secret}@redis:6379/0
-      GRAPH_DB_ENABLED: ${GRAPH_DB_ENABLED:-true}
-      GRAPH_DB_URL: redis://:${FALKORDB_PASSWORD:-dochub_graph_secret}@falkordb:6379
-      GRAPH_DB_NAME: ${GRAPH_DB_NAME:-dochub_knowledge}
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      LOG_JSON: ${LOG_JSON:-false}
+      <<: *backend-env
     ports:
       - "${BACKEND_PORT:-${API_PORT:-8000}}:8000"
     volumes:
@@ -170,7 +163,57 @@ services:
     networks:
       - dochub_net
 
-  # ── FRONTEND (React + Vite) ──────────────────────────────────────────────
+  celery-worker:
+    profiles: ["celery"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: dochub-celery-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      <<: *backend-env
+    volumes:
+      - ./backend:/app:delegated
+      - backend_cache:/root/.cache
+    command: >
+      celery -A app.tasks.celery_app worker
+      -Q ingestion,ingestion.dlq
+      -l info
+      --concurrency=2
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - dochub_net
+
+  flower:
+    profiles: ["celery"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: dochub-flower
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      <<: *backend-env
+    ports:
+      - "${FLOWER_PORT:-5555}:5555"
+    command: celery -A app.tasks.celery_app flower --port=5555
+    depends_on:
+      redis:
+        condition: service_healthy
+      celery-worker:
+        condition: service_started
+    networks:
+      - dochub_net
+
   frontend:
     build:
       context: ./frontend

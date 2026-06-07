@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time as _time
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
@@ -13,7 +14,7 @@ from openai import OpenAI
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.utils.cost_logging import track_openai_call
+from app.middleware.cost_logging import track_openai_call
 from app.schemas.chat import ChatResponse, Citation, Source
 from app.services.profile_service import ProfileService
 from app.services.prompt_builder import build_system_prompt
@@ -138,6 +139,9 @@ class RAGService:
         context_block, label_map = _build_context_block(compressed)
         system_prompt, temperature = await self._resolve_system_prompt(user_id)
         client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        _stream_start = _time.monotonic()
+        _input_tokens = 0
+        _output_tokens = 0
 
         def _stream():
             return client.chat.completions.create(
@@ -150,21 +154,54 @@ class RAGService:
                     },
                 ],
                 stream=True,
+                stream_options={"include_usage": True},
                 temperature=temperature,
             )
 
         stream = await asyncio.to_thread(_stream)
         full = []
         for event in stream:
-            delta = event.choices[0].delta.content or ""
+            if event.usage is not None:
+                _input_tokens = event.usage.prompt_tokens or 0
+                _output_tokens = event.usage.completion_tokens or 0
+                continue
+            delta = event.choices[0].delta.content or "" if event.choices else ""
             if delta:
                 full.append(delta)
                 yield f"data: {json.dumps({'type': 'token', 'content': delta})}\n\n"
 
         answer = "".join(full)
         citations = _extract_citations(answer, label_map, compressed)
-        risk_fields = await self._assess_risk(user_id=user_id, chunks=compressed)
-        yield f"data: {json.dumps({'type': 'done', 'answer': answer, 'citations': [c.model_dump(mode='json') for c in citations], 'model': settings.DEFAULT_LLM_MODEL, **risk_fields})}\n\n"
+        _latency_ms = int((_time.monotonic() - _stream_start) * 1000)
+
+        from app.middleware.cost_logging import _calculate_cost, _log_to_db
+
+        _cost = _calculate_cost(settings.DEFAULT_LLM_MODEL, _input_tokens, _output_tokens)
+        asyncio.create_task(
+            _log_to_db(
+                model=settings.DEFAULT_LLM_MODEL,
+                input_tokens=_input_tokens,
+                output_tokens=_output_tokens,
+                cost_usd=_cost,
+                user_id=user_id,
+                request_type="rag_stream",
+                latency_ms=_latency_ms,
+                trace_id=None,
+                status="success",
+                error_message=None,
+            )
+        )
+        logger.info(
+            "stream chat | model=%s tokens=%d+%d cost=$%.6f latency=%dms user=%s",
+            settings.DEFAULT_LLM_MODEL,
+            _input_tokens,
+            _output_tokens,
+            _cost,
+            _latency_ms,
+            user_id,
+        )
+
+        yield f"data: {json.dumps({'type': 'done', 'answer': answer, 'citations': [c.model_dump(mode='json') for c in citations], 'model': settings.DEFAULT_LLM_MODEL})}\n\n"
 
     async def _generate_answer(
         self,
@@ -192,7 +229,7 @@ class RAGService:
             ),
             model=settings.DEFAULT_LLM_MODEL,
             user_id=user_id,
-            operation="rag_chat",
+            request_type="rag_chat",
             trace_id=request_id,
         )
         return response.choices[0].message.content or ""
