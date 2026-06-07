@@ -1,0 +1,6 @@
+-- REFERENCE ONLY — canonical migration:
+--   infra/supabase/migrations/009_ai_request_logs.sql
+--
+-- Upgrades ai_request_logs from 002 baseline (request_type, prompt_tokens, …)
+-- to unified schema (operation, prompt_tokens, completion_tokens, ai_cost_summary view).
+-- Application logging: app/utils/cost_logging.py

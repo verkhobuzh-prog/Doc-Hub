@@ -13,6 +13,7 @@ from openai import OpenAI
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.utils.cost_logging import track_openai_call
 from app.schemas.chat import ChatResponse, Citation, Source
 from app.services.profile_service import ProfileService
 from app.services.prompt_builder import build_system_prompt
@@ -86,7 +87,11 @@ class RAGService:
 
         system_prompt, temperature = await self._resolve_system_prompt(user_id)
         answer = await self._generate_answer(
-            query, context_block, system_prompt=system_prompt, temperature=temperature
+            query,
+            context_block,
+            user_id=user_id,
+            system_prompt=system_prompt,
+            temperature=temperature,
         )
 
         citations = _extract_citations(answer, label_map, compressed)
@@ -166,13 +171,15 @@ class RAGService:
         query: str,
         context_block: str,
         *,
+        user_id: str,
         system_prompt: str,
         temperature: float = 0.3,
+        request_id: str | None = None,
     ) -> str:
         client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
-        def _call():
-            response = client.chat.completions.create(
+        response = await track_openai_call(
+            lambda: client.chat.completions.create(
                 model=settings.DEFAULT_LLM_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -182,10 +189,13 @@ class RAGService:
                     },
                 ],
                 temperature=temperature,
-            )
-            return response.choices[0].message.content or ""
-
-        return await asyncio.to_thread(_call)
+            ),
+            model=settings.DEFAULT_LLM_MODEL,
+            user_id=user_id,
+            operation="rag_chat",
+            trace_id=request_id,
+        )
+        return response.choices[0].message.content or ""
 
     async def _assess_risk(
         self,
