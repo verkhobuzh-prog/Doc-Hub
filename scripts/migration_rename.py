@@ -38,6 +38,8 @@ MIGRATION_ORDER: list[tuple[str, str | None, str]] = [
     ("005", "004_rls_hardening.sql", "005_rls_hardening.sql"),
     ("006", "005_pilot_invites_and_catalog.sql", "006_pilot_invites_and_catalog.sql"),
     ("007", "006_document_state_machine.sql", "007_document_state_machine.sql"),
+    ("008", "008_bitemporal_extension.sql", "008_bitemporal_extension.sql"),
+    ("009", "009_ai_request_logs.sql", "009_ai_request_logs.sql"),
 ]
 
 IGNORED_PATTERNS = {".DS_Store", "__pycache__", ".gitkeep", "MIGRATION_MANIFEST.txt"}
