@@ -6,7 +6,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.supabase import get_supabase, run_supabase
 from app.knowledge.confidence import ConfidencePropagator

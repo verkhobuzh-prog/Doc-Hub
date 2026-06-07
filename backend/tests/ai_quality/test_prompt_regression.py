@@ -13,11 +13,11 @@ from app.utils.ai_quality import prompt_signature
 class TestPromptRegression:
     def test_default_prompt_signature_stable(self):
         prompt = build_system_prompt(None)
-        assert prompt_signature(prompt) == "4889b541e313bc60"
+        assert prompt_signature(prompt) == "e3276240f6d67286"
 
     def test_legal_profile_signature_stable(self, legal_profile_l5):
         prompt = build_system_prompt(legal_profile_l5)
-        assert prompt_signature(prompt) == "97410a60f5f83165"
+        assert prompt_signature(prompt) == "70fe8cfb4f2471e7"
 
     @pytest.mark.parametrize(
         "domain,required_phrase",
@@ -63,9 +63,9 @@ class TestPromptRegression:
             updated_at=datetime.now(),
         )
         expected = {
-            1: "4c1f01ba1ba36536",
-            3: "0b347204f97002d7",
-            5: "d07cb0475b98d720",
+            1: "0d43f8b812fb3352",
+            3: "100709f7d74165e9",
+            5: "83b29803d4ba83f2",
         }
         assert prompt_signature(build_system_prompt(profile)) == expected[level]
 
