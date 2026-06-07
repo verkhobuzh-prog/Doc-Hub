@@ -174,17 +174,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """
     Sliding window rate limiting middleware.
 
-    Підключення в main.py:
-        from app.middleware.rate_limit import RateLimitMiddleware
+    Підключення в main.py (RateLimit — перший add_middleware):
         app.add_middleware(RateLimitMiddleware)
-
-    ВАЖЛИВО: add_middleware() додає в стек LIFO.
-    RateLimitMiddleware треба додавати ПІСЛЯ RequestContextMiddleware щоб
-    X-Request-ID вже був встановлений до логування rate limit events.
-
-    Правильний порядок у main.py:
-        app.add_middleware(RequestContextMiddleware)   # додається першим
-        app.add_middleware(RateLimitMiddleware)         # перевіряється першим
+        app.add_middleware(RequestContextMiddleware)
+        app.add_middleware(CORSMiddleware, ...)
     """
 
     def __init__(self, app: ASGIApp) -> None:

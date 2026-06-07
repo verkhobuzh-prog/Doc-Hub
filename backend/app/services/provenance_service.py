@@ -24,6 +24,7 @@ from typing import Any
 from fastapi import HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.postgres import get_pool
 from app.db.supabase import get_supabase, run_supabase
@@ -48,6 +49,19 @@ _EMPTY_SUMMARY: dict[str, int | float] = {
 _ENTITY_FIELDS = "id, evidence_quote, doc_id, confidence, validation_status"
 
 
+def _validate_entity_name(name: str) -> str:
+    """Reject PostgREST/SQL filter injection patterns in entity names."""
+    value = name.strip()
+    if not value:
+        raise ValueError("entity_name must not be empty")
+    if not _ENTITY_NAME_PATTERN.match(value):
+        raise ValueError(
+            "entity_name contains invalid characters. "
+            "Only letters, digits, spaces, hyphens, underscores and dots are allowed."
+        )
+    return value
+
+
 class ProvenanceQueryParams(BaseModel):
     """Валідовані параметри запиту провенансу."""
 
@@ -60,13 +74,7 @@ class ProvenanceQueryParams(BaseModel):
     @field_validator("entity_name")
     @classmethod
     def validate_entity_name(cls, v: str) -> str:
-        v = v.strip()
-        if not _ENTITY_NAME_PATTERN.match(v):
-            raise ValueError(
-                "entity_name contains invalid characters. "
-                "Only letters, digits, spaces, hyphens, underscores and dots are allowed."
-            )
-        return v
+        return _validate_entity_name(v)
 
     @field_validator("predicate")
     @classmethod
@@ -95,11 +103,10 @@ class ProvenanceQueryParams(BaseModel):
 
 class ProvenanceService:
     """
-    Сервіс провенансу з параметризованими запитами.
+    Сервіс провенансу з параметризованими asyncpg-запитами.
 
-    Пріоритет методів:
-      1. asyncpg pool (параметризований SQL) — основний
-      2. Supabase SDK з явною санітизацією — fallback
+    get_provenance_for_entity вимагає DATABASE_URL і активний pool (503 інакше).
+    Інші методи можуть використовувати Supabase SDK з окремими .eq() фільтрами.
     """
 
     async def _get_user_doc_ids(self, user_id: str) -> list[str]:
@@ -181,12 +188,20 @@ class ProvenanceService:
             offset=offset,
         )
 
-        pool = get_pool()
-        if pool is not None:
-            return await self._query_with_asyncpg(pool, params)
+        if not settings.database_configured:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database not configured (DATABASE_URL)",
+            )
 
-        logger.debug("asyncpg pool unavailable, using Supabase SDK fallback")
-        return await self._query_with_supabase_sdk(params)
+        pool = get_pool()
+        if pool is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database pool unavailable",
+            )
+
+        return await self._query_with_asyncpg(pool, params)
 
     async def get_entity_provenance(
         self,

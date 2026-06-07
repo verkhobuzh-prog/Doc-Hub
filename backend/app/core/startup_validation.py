@@ -199,10 +199,10 @@ def _check_debug_modes(settings: "Settings") -> list[str]:
         return errors
 
     # FastAPI debug mode
-    debug = getattr(settings, "DEBUG", False)
+    debug = getattr(settings, "DEBUG", False) or getattr(settings, "API_DEBUG", False)
     if debug:
         errors.append(
-            "SECURITY: DEBUG=True is set in a protected environment. "
+            "SECURITY: DEBUG/API_DEBUG=True is set in a protected environment. "
             "This exposes stack traces and internal details. Set DEBUG=False."
         )
 
@@ -292,3 +292,7 @@ def run_startup_security_checks(settings: "Settings") -> None:
         "Startup security checks passed (%d warnings).",
         len(warnings)
     )
+
+
+# Public alias (integration docs / main.py)
+run_startup_validation = run_startup_security_checks
